@@ -1,1 +1,8 @@
 references/DEVELOPER-REFERENCE.md.archive
+*.swp
+*.swo
+*~
+.DS_Store
+node_modules/
+.env
+*.log
