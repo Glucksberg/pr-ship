@@ -135,8 +135,19 @@ Scoring:
 
 - **Source:** [github.com/Glucksberg/pr-ship](https://github.com/Glucksberg/pr-ship)
 - **Maintainer:** Markus Glucksberg ([@Glucksberg](https://github.com/Glucksberg))
-- **Update mechanism:** Daily cron checks OpenClaw upstream `CHANGELOG.md`. When changes detected, `CURRENT-CONTEXT.md` is updated, pushed to GitHub, and published to ClawHub.
-- **Verification:** GitHub repo is canonical. ClawHub version should always match GitHub HEAD.
+- **Update mechanism:** `CURRENT-CONTEXT.md` metadata is refreshed daily via cron when OpenClaw upstream `CHANGELOG.md` changes. GitHub repo is updated separately by the maintainer.
+- **Verification:** The GitHub repo is the canonical source of truth. To verify your installed copy matches:
+
+```bash
+# Quick: compare file list + versions
+diff <(clawhub list | grep pr-ship) <(curl -s https://api.github.com/repos/Glucksberg/pr-ship/contents/package.json | jq -r '.content' | base64 -d | jq -r .version)
+
+# Full: diff your local install against GitHub
+SKILL_DIR="$(find ~/.openclaw/skills -maxdepth 1 -name pr-ship -type d 2>/dev/null || echo skills/pr-ship)"
+for f in SKILL.md package.json references/CURRENT-CONTEXT.md; do
+  diff <(cat "$SKILL_DIR/$f") <(curl -s "https://raw.githubusercontent.com/Glucksberg/pr-ship/main/$f") && echo "$f: ✔ match" || echo "$f: ✘ differs"
+done
+```
 
 ## Security Notice
 

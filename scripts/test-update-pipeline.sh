@@ -46,56 +46,39 @@ else
   fail "On branch '$BRANCH' — expected main"
 fi
 
-if cd "$SKILL_DIR" && git push --dry-run origin main &>/dev/null; then
-  pass "Git push dry-run succeeds (auth OK)"
-else
-  fail "Git push dry-run failed — check SSH key / auth"
-fi
-
 echo ""
 
 # ─── T2: Stray file leak prevention ──────────────────────────
-bold "T2: Stray file leak prevention"
-
-TRAP_FILE="$SKILL_DIR/.env.test-trap"
-echo "SECRET_KEY=do-not-commit" > "$TRAP_FILE"
+bold "T2: Stray file leak prevention (defense-in-depth)"
 
 cd "$SKILL_DIR"
-# Simulate the exact staging command from the cron job
-git add references/CURRENT-CONTEXT.md package.json 2>/dev/null || true
-STAGED=$(git diff --cached --name-only 2>/dev/null)
 
-if echo "$STAGED" | grep -q ".env.test-trap"; then
-  fail "Stray file .env.test-trap was staged! git add is too broad"
-else
-  pass "Stray file .env.test-trap NOT staged (explicit paths work)"
-fi
-
-# Also verify .gitignore blocks it
+# Test .gitignore blocks .env files
+TRAP_FILE="$SKILL_DIR/.env.test-trap"
+echo "SECRET_KEY=do-not-commit" > "$TRAP_FILE"
 if git check-ignore -q "$TRAP_FILE" 2>/dev/null; then
   pass ".gitignore blocks .env files"
 else
-  warn ".gitignore does not explicitly block .env.test-trap (relies on explicit staging)"
+  fail ".gitignore does not block .env files"
 fi
-
-# Cleanup
 rm -f "$TRAP_FILE"
-git reset HEAD -- . &>/dev/null || true
 
-# Test with a random unknown file too
-RANDOM_FILE="$SKILL_DIR/random-debug-$(date +%s).txt"
-echo "debug stuff" > "$RANDOM_FILE"
-git add references/CURRENT-CONTEXT.md package.json 2>/dev/null || true
-STAGED=$(git diff --cached --name-only 2>/dev/null)
-
-if echo "$STAGED" | grep -q "random-debug"; then
-  fail "Random file was staged — explicit add is broken"
+# Test .gitignore blocks swap files
+SWAP_FILE="$SKILL_DIR/SKILL.md.swp"
+touch "$SWAP_FILE"
+if git check-ignore -q "$SWAP_FILE" 2>/dev/null; then
+  pass ".gitignore blocks .swp files"
 else
-  pass "Random file NOT staged"
+  warn ".gitignore does not block .swp files"
 fi
+rm -f "$SWAP_FILE"
 
-rm -f "$RANDOM_FILE"
-git reset HEAD -- . &>/dev/null || true
+# Test .gitignore blocks archive
+if git check-ignore -q "$SKILL_DIR/references/DEVELOPER-REFERENCE.md.archive" 2>/dev/null; then
+  pass ".gitignore blocks archive file"
+else
+  fail ".gitignore does not block archive file"
+fi
 
 echo ""
 
@@ -166,11 +149,11 @@ LOCAL_SHA=$(git rev-parse main:CHANGELOG.md 2>/dev/null || echo none)
 UPSTREAM_SHA=$(git rev-parse upstream/main:CHANGELOG.md 2>/dev/null || echo none)
 
 if [ "$LOCAL_SHA" != "none" ] && [ "$UPSTREAM_SHA" != "none" ]; then
-  pass "Can read CHANGELOG SHA (local=$LOCAL_SHA upstream=$UPSTREAM_SHA)"
+  pass "Can read CHANGELOG SHA (local=${LOCAL_SHA:0:12} upstream=${UPSTREAM_SHA:0:12})"
   if [ "$LOCAL_SHA" = "$UPSTREAM_SHA" ]; then
     pass "CHANGELOGs match (cron would skip — this is normal)"
   else
-    warn "CHANGELOGs differ (cron would trigger an update)"
+    warn "CHANGELOGs differ (cron would trigger a metadata update)"
   fi
 else
   fail "Cannot read CHANGELOG SHAs — git refs broken"
@@ -186,8 +169,8 @@ fi
 
 echo ""
 
-# ─── T6: Provenance verification ─────────────────────────────
-bold "T6: Provenance verification"
+# ─── T6: Provenance — local vs GitHub HEAD ───────────────────
+bold "T6: Provenance (local vs GitHub)"
 
 cd "$SKILL_DIR"
 LOCAL_SHA=$(git rev-parse --short HEAD 2>/dev/null || echo "none")
@@ -196,9 +179,9 @@ REMOTE_SHA=$(git ls-remote origin HEAD 2>/dev/null | cut -c1-7 || echo "none")
 if [ "$LOCAL_SHA" != "none" ] && [ "$REMOTE_SHA" != "none" ]; then
   pass "Can query both local and remote HEAD"
   if [ "$LOCAL_SHA" = "$REMOTE_SHA" ]; then
-    pass "Provenance verified: local ($LOCAL_SHA) == remote ($REMOTE_SHA)"
+    pass "In sync: local ($LOCAL_SHA) == GitHub ($REMOTE_SHA)"
   else
-    warn "Provenance mismatch: local=$LOCAL_SHA remote=$REMOTE_SHA (may need push)"
+    warn "Out of sync: local=$LOCAL_SHA GitHub=$REMOTE_SHA — needs manual push"
   fi
 else
   fail "Cannot query HEAD SHAs for provenance check"
@@ -206,25 +189,8 @@ fi
 
 echo ""
 
-# ─── T7: ClawHub CLI availability ────────────────────────────
-bold "T7: ClawHub CLI"
-
-if command -v clawhub &>/dev/null; then
-  pass "clawhub CLI found: $(which clawhub)"
-else
-  fail "clawhub CLI not found in PATH"
-fi
-
-if clawhub whoami &>/dev/null; then
-  pass "clawhub auth valid"
-else
-  fail "clawhub auth failed — run 'clawhub login'"
-fi
-
-echo ""
-
-# ─── T8: Cron job config validation ──────────────────────────
-bold "T8: Cron job config"
+# ─── T7: Cron job config validation ──────────────────────────
+bold "T7: Cron job config"
 
 JOBS_FILE="$HOME/.openclaw/cron/jobs.json"
 if [ -f "$JOBS_FILE" ]; then
@@ -243,33 +209,36 @@ else: print('NOT_FOUND')
   else
     pass "Cron job 492d067a found"
 
-    # Check for dangerous patterns
-    # Count actual git add commands (in code blocks, not in instructional text)
-    # The instruction says "Never use git add -A" but actual command should be explicit
-    ACTUAL_ADD=$(echo "$JOB_MSG" | grep -c "^git add " || true)
-    SAFE_ADD=$(echo "$JOB_MSG" | grep -c "git add references/CURRENT-CONTEXT.md package.json" || true)
-    if [ "$SAFE_ADD" -ge 1 ]; then
-      pass "Uses explicit git add (references/CURRENT-CONTEXT.md package.json)"
+    # Cron should NOT have git push or clawhub publish
+    if echo "$JOB_MSG" | grep -q "git push"; then
+      fail "Cron still has git push — should be removed (manual sync only)"
     else
-      fail "Missing explicit git add command"
+      pass "No git push in cron (manual sync only)"
     fi
 
-    if echo "$JOB_MSG" | grep -q "GIT_OK"; then
-      pass "Has GIT_OK guard for push failure"
+    if echo "$JOB_MSG" | grep -q "clawhub publish"; then
+      fail "Cron still has clawhub publish — should be removed (manual sync only)"
     else
-      fail "Missing GIT_OK guard — clawhub publish not gated on push success"
+      pass "No clawhub publish in cron (manual sync only)"
     fi
 
-    if echo "$JOB_MSG" | grep -q "SKIP_CLAWHUB"; then
-      pass "Has SKIP_CLAWHUB guard"
+    # Should have metadata update + version bump
+    if echo "$JOB_MSG" | grep -q "CURRENT-CONTEXT.md"; then
+      pass "Updates CURRENT-CONTEXT.md metadata"
     else
-      fail "Missing SKIP_CLAWHUB guard"
+      fail "Missing CURRENT-CONTEXT.md update step"
     fi
 
-    if echo "$JOB_MSG" | grep -q "git ls-remote"; then
-      pass "Has real provenance check (git ls-remote)"
+    if echo "$JOB_MSG" | grep -q "VERSION_BUMP"; then
+      pass "Has version bump step"
     else
-      warn "No git ls-remote provenance check"
+      fail "Missing version bump step"
+    fi
+
+    if echo "$JOB_MSG" | grep -q "pr-ship-update cron"; then
+      pass "sed verification (grep -q) present"
+    else
+      warn "Missing sed verification after update"
     fi
 
     TIMEOUT=$(python3 -c "
@@ -278,10 +247,10 @@ jobs=json.load(open('$JOBS_FILE'))['jobs']
 j=[x for x in jobs if x['id']=='492d067a-5cb1-47c5-92bc-fd8985c64a1f'][0]
 print(j['payload']['timeoutSeconds'])
 " 2>/dev/null || echo "0")
-    if [ "$TIMEOUT" -ge 180 ]; then
-      pass "Timeout is ${TIMEOUT}s (>= 180s)"
+    if [ "$TIMEOUT" -ge 60 ] && [ "$TIMEOUT" -le 120 ]; then
+      pass "Timeout is ${TIMEOUT}s (appropriate for metadata-only job)"
     else
-      fail "Timeout is ${TIMEOUT}s — should be >= 180s for git+clawhub steps"
+      warn "Timeout is ${TIMEOUT}s (expected 60-120s for metadata-only job)"
     fi
   fi
 else
@@ -290,8 +259,8 @@ fi
 
 echo ""
 
-# ─── T9: File integrity ──────────────────────────────────────
-bold "T9: Skill file integrity"
+# ─── T8: Skill file integrity ────────────────────────────────
+bold "T8: Skill file integrity"
 
 cd "$SKILL_DIR"
 
@@ -326,6 +295,20 @@ else
   fail "SKILL.md missing Security Notice section"
 fi
 
+# Provenance should mention manual verification, not auto-publish
+if grep -q "GitHub repo is updated separately" SKILL.md; then
+  pass "SKILL.md provenance says manual sync (no auto-publish)"
+else
+  warn "SKILL.md provenance may still reference auto-publish"
+fi
+
+# Should have diff verification commands for users
+if grep -q "diff.*raw.githubusercontent.com" SKILL.md; then
+  pass "SKILL.md has user verification commands"
+else
+  warn "SKILL.md missing user verification commands"
+fi
+
 # README.md
 if [ -f README.md ]; then
   pass "README.md exists"
@@ -351,8 +334,8 @@ fi
 
 echo ""
 
-# ─── T10: GitHub repo state ──────────────────────────────────
-bold "T10: GitHub repo state"
+# ─── T9: GitHub repo state ───────────────────────────────────
+bold "T9: GitHub repo state"
 
 if gh repo view Glucksberg/pr-ship &>/dev/null; then
   pass "GitHub repo Glucksberg/pr-ship exists"
@@ -402,7 +385,8 @@ if [[ "${1:-}" == "--live" ]]; then
   echo "Triggering pr-ship-update cron job..."
   pnpm --dir "$OPENCLAW_DIR" openclaw cron run 492d067a-5cb1-47c5-92bc-fd8985c64a1f 2>&1 || true
   echo ""
-  echo "Check Telegram for the report. Verify with:"
+  echo "Check Telegram for the report."
+  echo "After manual sync, verify with:"
   echo "  cd $SKILL_DIR && git log --oneline -3"
   echo "  gh api repos/Glucksberg/pr-ship/commits/main --jq '.sha[:7]'"
 fi

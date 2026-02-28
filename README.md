@@ -27,8 +27,8 @@ See [SKILL.md](SKILL.md) for the full workflow and report format.
 
 - **Maintainer:** Markus Glucksberg ([@Glucksberg](https://github.com/Glucksberg))
 - **Published on:** [ClawHub](https://clawhub.com/skills/pr-ship)
-- **Update mechanism:** Daily cron checks OpenClaw upstream `CHANGELOG.md`. When changes are detected, `CURRENT-CONTEXT.md` metadata is updated, pushed to this repo, and published to ClawHub.
-- **Verification:** This GitHub repo is canonical. The ClawHub version should always match GitHub HEAD.
+- **Update mechanism:** `CURRENT-CONTEXT.md` metadata is refreshed daily when OpenClaw upstream changes. This repo is updated separately by the maintainer.
+- **Verification:** This GitHub repo is canonical. See [SKILL.md](SKILL.md#provenance) for commands to diff your local install against this repo.
 
 ## License
 
