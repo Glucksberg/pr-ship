@@ -1,6 +1,6 @@
 {
   "name": "pr-ship",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "description": "Pre-PR checklist and shipping workflow for OpenClaw",
   "main": "SKILL.md",
   "repository": {
