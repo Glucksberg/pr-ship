@@ -4,5 +4,5 @@ references/DEVELOPER-REFERENCE.md.archive
 *~
 .DS_Store
 node_modules/
-.env
+.env*
 *.log
