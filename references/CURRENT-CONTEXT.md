@@ -1,75 +1,98 @@
 # CURRENT-CONTEXT.md — OpenClaw Version-Specific Gotchas
 
-_Auto-updated by fork-manager changelog-watch. Last updated: 2026-02-27T10:40 UTC (upstream sync)_
+_Auto-updated by pr-ship-update cron. Last updated: 2026-03-03T00:16 UTC (upstream sync)_
 
 ---
 
-## Active Version: 2026.2.26 (Released)
+## Active Version: 2026.3.2 (Released)
 
 ### Behavioral Changes (Breaking / Semantics)
 
-- **Heartbeat directPolicy default flipped back to `allow`:** After `2026.2.24` set it to `block`, `2026.2.25` reverts the default to `allow`. Anyone who migrated to `block` must explicitly set `agents.defaults.heartbeat.directPolicy: "block"` or per-agent override. PRs touching heartbeat delivery must account for this.
-- **`openclaw onboard --reset` scope changed:** Default scope is now `config+creds+sessions` (workspace deletion requires `--reset-scope full`). PRs touching onboarding flows or CLI `--reset` must update documentation and tests.
-- **Secrets management:** New `openclaw secrets` workflow (`audit`, `configure`, `apply`, `reload`) with runtime snapshot activation. Config files referencing auth fields may now be validated through `secrets apply` with stricter target-path validation.
-- **OpenAI Codex transport default:** `openai-codex` is now WebSocket-first by default (`transport: "auto"` with SSE fallback). PRs that assume SSE-only Codex transport are now potentially broken.
-- **Discord thread lifecycle:** Replaced fixed TTL with inactivity-based (`idleHours`, default 24h) plus optional hard `maxAgeHours` controls. New `/session idle` and `/session max-age` commands added.
+- **BREAKING: Node exec approval payloads require `systemRunPlan`.** `host=node` approval requests without that plan are rejected. PRs touching node exec approval flows must include it.
+- **BREAKING: Node `system.run` canonical path pinning.** Path-token commands now resolve to canonical executable path (`realpath`) in allowlist and approval flows. Tests asserting token-form argv (e.g. `tr`) must accept canonical paths (e.g. `/usr/bin/tr`).
+- **OpenAI Responses WebSocket-first by default:** `openai` provider now uses WebSocket transport by default (`transport: "auto"` with SSE fallback). PRs assuming SSE-only are potentially broken.
+- **Discord thread lifecycle overhaul:** Fixed TTL replaced with inactivity-based (`idleHours`, default 24h) plus optional hard `maxAgeHours`. New `/session idle` + `/session max-age` commands.
+- **Telegram DM topics:** Per-DM `direct` + topic config (allowlists, `dmPolicy`, `skills`, `systemPrompt`, `requireTopic`). DM topics routed as distinct sessions with topic-aware authorization/debounce.
+- **Cron heartbeat light bootstrap:** Opt-in lightweight bootstrap mode (`--light-context` for cron, `agents.*.heartbeat.lightContext` for heartbeat). Skips bootstrap-file injection.
+- **Subagent completion events:** Typed `task_completion` internal events replace ad-hoc system-message handoff. PRs touching subagent completion must use new event structure.
+- **Sessions/Attachments:** Inline file attachment support for `sessions_spawn` (subagent runtime) with base64/utf8 encoding.
+- **ACP/ACPX streaming:** ACPX pinned to `0.1.15`, `final_only` default delivery, reduced tool-event noise.
+- **Shell env markers:** `OPENCLAW_SHELL` set across shell-like runtimes (exec, acp, acp-client, tui-local).
 
 ### New Gotchas (Things That Now Behave Differently)
 
-- **Agent binding CLI:** New `openclaw agents bindings/bind/unbind` commands for account-scoped route management. PRs that modify agent routing or account binding must not conflict with channel-only to account-scoped upgrade paths.
-- **Session parentForkMaxTokens:** Slack thread session parent inheritance now capped at `100000` tokens (`session.parentForkMaxTokens`; `0` disables). PRs touching Slack session context sizing should know this new config knob.
-- **ACP thread-bound agents:** ACP agents are now first-class thread-session runtimes. PRs touching subagent/session spawning must handle new `acp` runtime paths.
-- **`plugins.entries.*` unknown keys:** Now startup warnings (ignored stale keys) instead of hard validation failures. PRs that rely on strict plugin entry validation may see behavior change.
-- **Auth-profiles alias normalization:** `mode -> type` and `apiKey -> key` now auto-normalized. PRs touching auth-profile reading must not double-apply the rename.
-- **Model `@profile` suffix parsing:** Now centralized; `@` only treated as profile separator after final `/`. Model IDs like `openai/@cf/...` no longer broken. PRs touching model parsing must use the new centralized parser.
-- **`openai-codex-responses`:** Now a valid `ModelApi` type in config schema and TypeScript union. PRs that enumerate ModelApi values must include it.
-- **Cron isolated routing session keys:** `agent:*` keys no longer double-prefixed. PRs touching cron delivery or isolated routing must not re-add a prefix.
-- **Cron lane draining:** New `draining` flag reset guarantees + new queue reject behavior during gateway restart drain windows. PRs touching queue management or restart flows must handle the new drain-reject error path.
-- **Telegram DM allowlist inheritance:** `dmPolicy: "allowlist"` now enforced with effective account-plus-parent config across all account-capable channels. `openclaw doctor --fix` can restore missing `allowFrom` entries.
-- **Queue recovery backoff:** Failed sends now persist `lastAttemptAt` and defer recovery retries until `lastAttemptAt + backoff` window, preventing retry starvation.
+- **Browser profile defaults:** `openclaw` profile preferred over `chrome` in headless/no-sandbox environments unless explicit `defaultProfile` configured.
+- **Browser act request compatibility:** Legacy flattened `action="act"` params now accepted alongside `request={...}`.
+- **Docker sandbox bootstrap hardening:** `OPENCLAW_SANDBOX` now opt-in parsing (`1|true|yes|on`), custom socket paths via `OPENCLAW_DOCKER_SOCKET`, rollback on partial failures.
+- **Daemon/systemd in containers:** Missing `systemctl` treated as unavailable (not error) during `is-enabled` checks.
+- **Gateway/Container probes:** Built-in `/health`, `/healthz`, `/ready`, `/readyz` endpoints with fallback routing.
+- **Security/Prompt spoofing hardening:** Queued runtime events no longer injected into user-role prompt text; spoof markers neutralized.
+- **Gateway/WS security:** Plaintext `ws://` loopback-only by default; private-network opt-in via `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`.
+- **Gateway/Subagent TLS pairing:** Local `gateway-client` backend self-connections skip pairing while non-local still requires it.
+- **Feishu multi-account + DM routing:** `defaultAccount` outbound routing, `dm:`/`group:` prefix support for `oc_` chat IDs.
+- **Tools/Diffs:** New `diffs` plugin tool for read-only diff rendering with canvas/PNG/PDF output.
+- **Tools/PDF analysis:** First-class `pdf` tool with native Anthropic/Google support, configurable `pdfModel`/`pdfMaxBytesMb`/`pdfMaxPages`.
+- **CLI/Config:** `openclaw config validate` and `openclaw config file` commands.
 
-### High-Risk Modules (Frequently Changed in 2026.2.25-26)
+### High-Risk Modules (Frequently Changed in 2026.3.x)
 
 | Module Prefix | Reason |
 |---|---|
-| src/security/ | 15+ security fixes in both versions: SSRF, symlinks, hardlinks, exec approvals, pairing |
-| src/telegram/ | Multiple webhook, streaming, typing, spoiler, native-commands fixes |
-| src/agents/ | Compaction safety, model fallback, config merge, tools normalization |
-| src/config/ | Auth-profiles alias, plugin entries validation, model API schema |
-| src/cli/ | Gateway CLI, openclaw agents, openclaw secrets, openclaw onboard, openclaw sessions |
-| extensions/bluebubbles/ | SSRF allowlist, monitor processing |
-| extensions/mattermost/ | Monitor auth |
-| src/plugins/ | Path-safety hardening, channel HTTP auth normalization |
-| src/infra/path-guards.ts | Symlink/hardlink boundary hardening |
-| src/queue/ | Drain/cron reliability overhaul |
+| src/telegram/ | DM topics, reply media context, voice fallback chunking, outbound chunking |
+| extensions/feishu/ | 15+ fixes: multi-account, docx tools, reactions, media types, rich-text parsing |
+| src/agents/ | Subagent completion events, thinking defaults, session status |
+| src/security/ | Prompt spoofing hardening, webhook path validation, browser service fail-close |
+| src/browser/ | Extension relay reconnect, profile defaults, CDP startup, act compatibility |
+| src/cli/ | Config validate, browser timeout, cron list columns |
+| apps/android/ | Nodes parity (camera, notifications, contacts, calendar, motion), voice TTS |
+| src/infra/ | Container probes, WS security, TLS pairing, sandbox bootstrap |
+| src/cron/ | Light bootstrap, announce delivery, lane draining |
+| extensions/slack/ | User-token resolution, announce target routing, native commands |
 
 ### Pre-PR Checklist Additions (Version-Specific)
 
-- **Security PRs:** If your PR touches path handling, symlinks, exec approvals, or auth — check against the 15+ security fixes in 2026.2.25-26. Confirm your change does not regress the stricter boundary checks.
-- **Typing indicator PRs:** 6+ typing indicator fixes landed in 2026.2.25-26 across Telegram, Discord, Slack, and cross-channel paths. Ensure your PR does not reintroduce leakage or stuck-indicator bugs.
-- **Model/Auth PRs:** Auth-profile alias normalization and model API enum changes affect config validation. Regenerate config schema types if you touched `types.models.ts` or `zod-schema.core.ts`.
-- **Cron/Queue PRs:** New drain window reject semantics and session key prefix invariants. Confirm your cron change does not assume pre-drain-fix queue accept behavior.
-- **Telegram webhook PRs:** Webhook startup now pre-initializes bots with callback-mode JSON. PRs touching webhook processing must preserve this path.
+- **Node exec PRs:** Must include `systemRunPlan` in approval payloads and accept canonical paths.
+- **Browser PRs:** Check profile defaults (openclaw vs chrome), act request format compatibility, CDP startup diagnostics.
+- **Feishu PRs:** Multi-account routing, rich-text post parsing, docx API changes, media type classification.
+- **Telegram PRs:** DM topic routing, reply media context, outbound chunk splitting.
+- **Docker PRs:** Sandbox opt-in parsing, socket paths, health check probes, systemd container detection.
+- **Cron PRs:** Light bootstrap mode, announce delivery status, session routing for reminders.
+- **Security PRs:** Prompt spoofing neutralization, WS loopback enforcement, webhook path validation.
 
 ---
 
 ## Recent Behavioral Changes (Rolling Window: Last 4 Versions)
 
+### 2026.3.1 / 2026.3.2
+
+- **OpenAI Responses WS-first default** with SSE fallback and warm-up option.
+- **Telegram DM topics** with per-DM config and topic-aware routing.
+- **Subagent typed completion events** (`task_completion`) replacing system-message handoff.
+- **Node exec canonical path pinning** and `systemRunPlan` requirement.
+- **Browser profile defaults** prefer `openclaw` in headless environments.
+- **Docker/Container probes** (`/healthz`, `/readyz`) and sandbox bootstrap hardening.
+- **Feishu comprehensive overhaul:** Multi-account, docx editing, reactions, rich-text parsing.
+
+### 2026.2.27
+
+- **German locale** support in Web UI.
+- **Discord thread lifecycle** inactivity-based controls.
+- **Android nodes** camera, device, notifications actions.
+- **Security** webhook rate-limit state bounding.
+
+### 2026.2.26
+
+- **Heartbeat `directPolicy` reverted** back to `allow` (was `block` in 2026.2.24-25).
+- **Secrets management** workflow (`audit`, `configure`, `apply`, `reload`).
+- **OpenAI Codex** WebSocket-first transport.
+- **Agent binding CLI** (`openclaw agents bindings/bind/unbind`).
+
 ### 2026.2.25
 
-- **Heartbeat `directPolicy` introduced:** New config to control DM delivery behavior (later default reverted in 2026.2.26).
-- **ACP thread-bound agents:** First-class runtime support for ACP agents in thread sessions.
-- **Subagent completion announce dispatch:** Refactored into explicit state machine with proper cleanup.
-- **Slack `parentForkMaxTokens`:** Cap on parent session token inheritance for thread sessions.
-- **Security hardening:** Gateway auth, WebSocket origin checks, trusted proxy restrictions, file consent binding, exec approvals hardening, workspace FS hardlinks blocked.
-
-### 2026.2.24
-
-- **Auto-reply abort shortcuts:** Expanded multilingual stop phrases (`stop openclaw`, `please stop`, etc.) with trailing punctuation support.
-- **Android onboarding:** Native four-step flow, five-tab shell (Connect, Chat, Voice, Screen, Settings).
-- **Heartbeat delivery breaking change:** Blocks direct/DM targets by default (reverted in 2026.2.25).
-- **Security sandbox breaking change:** Blocks Docker `network: "container:<id>"` by default (opt-in via `dangerouslyAllowContainerNamespaceJoin`).
-- **Talk/Gateway config:** Provider-agnostic Talk configuration with gateway metadata exposure.
+- **ACP thread-bound agents** first-class runtime support.
+- **Subagent completion announce** refactored state machine.
+- **Slack `parentForkMaxTokens`** cap on parent session token inheritance.
+- **Security hardening** across gateway auth, WebSocket, file consent, exec approvals.
 
 ---
 
